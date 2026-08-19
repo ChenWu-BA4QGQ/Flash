@@ -30,7 +30,6 @@ public class QuicknoteManager: ObservableObject {
     }
     
     private var folderWatcherSource: DispatchSourceFileSystemObject?
-    private var folderFileDescriptor: Int32 = -1
     
     public init() {
         let defaultPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? NSHomeDirectory()
@@ -51,27 +50,25 @@ public class QuicknoteManager: ObservableObject {
             try? fileManager.createDirectory(at: folderURL, withIntermediateDirectories: true, attributes: nil)
         }
         
-        folderFileDescriptor = open(folderURL.path, O_EVTONLY)
-        guard folderFileDescriptor >= 0 else { return }
+        let fileDescriptor = open(folderURL.path, O_EVTONLY)
+        guard fileDescriptor >= 0 else { return }
         
-        folderWatcherSource = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: folderFileDescriptor,
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fileDescriptor,
             eventMask: [.write],
             queue: DispatchQueue.global(qos: .userInteractive)
         )
+        folderWatcherSource = source
         
-        folderWatcherSource?.setEventHandler { [weak self] in
+        source.setEventHandler { [weak self] in
             self?.loadRecentNotes()
         }
         
-        folderWatcherSource?.setCancelHandler { [weak self] in
-            if let fd = self?.folderFileDescriptor, fd >= 0 {
-                close(fd)
-            }
-            self?.folderFileDescriptor = -1
+        source.setCancelHandler {
+            close(fileDescriptor)
         }
         
-        folderWatcherSource?.resume()
+        source.resume()
     }
     
     public func stopWatchingStorageFolder() {
@@ -130,19 +127,22 @@ public class QuicknoteManager: ObservableObject {
         let sanitizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "/", with: "_")
         
         if !sanitizedTitle.isEmpty {
-            targetFileURL = folderURL.appendingPathComponent("\(sanitizedTitle).\(Constants.mdExtension)")
+            targetFileURL = availableURL(
+                for: sanitizedTitle,
+                in: folderURL,
+                existingNoteURL: overridingNote?.url
+            )
         } else {
             targetFileURL = generateUniqueURL(in: folderURL)
         }
         
-        if let oldNote = overridingNote, oldNote.url != targetFileURL {
-            if fileManager.fileExists(atPath: oldNote.url.path) {
-                try? fileManager.removeItem(at: oldNote.url)
-            }
-        }
-        
         do {
             try trimmedContent.write(to: targetFileURL, atomically: true, encoding: .utf8)
+            if let oldNote = overridingNote,
+               oldNote.url != targetFileURL,
+               fileManager.fileExists(atPath: oldNote.url.path) {
+                try fileManager.removeItem(at: oldNote.url)
+            }
             loadRecentNotes()
         } catch {
             print("❌ Flash 写入失败: \(error.localizedDescription)")
@@ -167,6 +167,21 @@ public class QuicknoteManager: ObservableObject {
             loadRecentNotes()
         } catch {
             print("❌ Flash 复制失败: \(error.localizedDescription)")
+        }
+    }
+
+    private func availableURL(for title: String, in folderURL: URL, existingNoteURL: URL?) -> URL {
+        let fileManager = FileManager.default
+        var sequence = 1
+
+        while true {
+            let suffix = sequence == 1 ? "" : " \(sequence)"
+            let candidate = folderURL.appendingPathComponent("\(title)\(suffix).\(Constants.mdExtension)")
+
+            if candidate == existingNoteURL || !fileManager.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+            sequence += 1
         }
     }
     

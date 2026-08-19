@@ -16,7 +16,7 @@ class WindowManager: ObservableObject {
             return
         }
         
-        guard let windowElement = window as! AXUIElement? else {
+        guard let windowElement = axUIElement(from: window) else {
             NSSound.beep()
             return
         }
@@ -26,7 +26,7 @@ class WindowManager: ObservableObject {
         var frameValue: AnyObject?
         
         guard AXUIElementCopyAttributeValue(windowElement, frameAttr, &frameValue) == .success,
-              let axFrameValue = frameValue as! AXValue? else {
+              let axFrameValue = axValue(from: frameValue) else {
             NSSound.beep()
             return
         }
@@ -117,11 +117,21 @@ class WindowManager: ObservableObject {
     private func readFrame(element: AXUIElement) -> CGRect? {
         var actualValue: AnyObject?
         guard AXUIElementCopyAttributeValue(element, "AXFrame" as CFString, &actualValue) == .success,
-              let axFrameValue = actualValue as! AXValue? else {
+              let axFrameValue = axValue(from: actualValue) else {
             return nil
         }
         var actualRect = CGRect.zero
         AXValueGetValue(axFrameValue, .cgRect, &actualRect)
         return actualRect
+    }
+    
+    private func axUIElement(from value: AnyObject?) -> AXUIElement? {
+        guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return unsafeBitCast(value, to: AXUIElement.self)
+    }
+    
+    private func axValue(from value: AnyObject?) -> AXValue? {
+        guard let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        return unsafeBitCast(value, to: AXValue.self)
     }
 }
